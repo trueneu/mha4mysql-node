@@ -441,21 +441,23 @@ sub dump_binlog_from_pos($$$$$) {
   my $filebase = shift;
   my $from_pos = shift;
   my $outfile  = shift;
+  my $to_pos   = shift;
 
   my $file = "$dir/$filebase";
-  my $size = -s $file;
+  my $size;
+  if ( $to_pos ) { $size=$to_pos } else { $size = -s $file; };
   my $fp;
   my $out;
   my $buf;
 
   if ( $from_pos >= $size ) {
     print
-"  No need to dump effective binlog data from $file (pos starts $from_pos, filesize $size). Skipping.\n";
+"  No need to dump effective binlog data from $file (pos starts $from_pos, pos end $size). Skipping.\n";
     return;
   }
   else {
     print
-"  Dumping effective binlog data from $file position $from_pos to tail($size)..";
+"  Dumping effective binlog data from $file position $from_pos to $size..";
   }
 
   open( $fp, "<", $file ) or croak "$!:$file";
@@ -471,13 +473,14 @@ sub dump_binlog_from_pos($$$$$) {
   print " ok.\n";
 }
 
-sub dump_binlog($$$$$$) {
+sub dump_binlog($$$$$$$) {
   my $self          = shift;
   my $dir           = shift;
   my $from_file     = shift;
   my $from_pos      = shift;
   my $out_diff_file = shift;
   my $first_file    = shift;
+  my $to_pos        = shift;
 
   my $effective_from_pos;
   if ($first_file) {
@@ -497,16 +500,17 @@ sub dump_binlog($$$$$$) {
       $self->dump_init_binlog_without_fde( $dir, $from_file, $out_diff_file );
   }
   $self->dump_binlog_from_pos( $dir, $from_file, $effective_from_pos,
-    $out_diff_file );
+    $out_diff_file, $to_pos );
 }
 
-sub dump_mysqlbinlog($$$$$$) {
+sub dump_mysqlbinlog($$$$$$$) {
   my $self                = shift;
   my $binlog_dir          = shift;
   my $from_file           = shift;
   my $from_pos            = shift;
   my $out_diff_file       = shift;
   my $suppress_row_format = shift;
+  my $to_pos              = shift;
   my $disable_log_bin     = $self->{disable_log_bin};
 
   my $rc;
@@ -526,6 +530,10 @@ sub dump_mysqlbinlog($$$$$$) {
   system($command);
 
   $command = "$self->{mysqlbinlog} --start-position=$from_pos ";
+  if ($to_pos) {
+    $command .= " --stop-position=$to_pos ";
+  }
+
   if ($suppress_row_format) {
     $command .= " --base64-output=never";
   }
@@ -551,15 +559,24 @@ sub dump_mysqlbinlog($$$$$$) {
   return 0;
 }
 
-sub concat_all_binlogs_from($$$$) {
-  my $self      = shift;
-  my $start_log = shift;
-  my $start_pos = shift;
-  my $outfile   = shift;
+sub concat_all_binlogs_from($$$$$$) {
+  my $self        = shift;
+  my $start_log   = shift;
+  my $start_pos   = shift;
+  my $outfile     = shift;
+  my $end_log_num = shift;
+  my $end_pos     = shift;
+
+
 
   my $binlog_dir          = $self->{dir};
   my $binlog_prefix       = $self->{prefix};
-  my $end_num             = $self->{end_num};
+  my $end_num;
+  if ( $end_log_num ) {
+    $end_num = $end_log_num;
+  } else {
+    $end_num = $self->{end_num};
+  }
   my $handle_raw_binlog   = $self->{handle_raw_binlog};
   my $mysqlbinlog_version = $self->{mysqlbinlog_version};
   my $mysql_version       = $self->{mysql_version};
@@ -572,16 +589,21 @@ sub concat_all_binlogs_from($$$$) {
       should_suppress_row_format( $mysqlbinlog_version, $mysql_version,
       $self->{mysqlbinlog} );
   }
+  my $to = ( $end_pos ? "$end_pos" : "EOF" );
   print
-" Concat binary/relay logs from $binlog_prefix.$start_num pos $start_pos to $binlog_prefix.$end_num EOF into $outfile ..\n";
+" Concat binary/relay logs from $binlog_prefix.$start_num pos $start_pos to $binlog_prefix.$end_num pos $to into $outfile ..\n";
 
   for ( my $i = $start_num ; $i <= $end_num ; $i++ ) {
     my $from_pos   = 4;
     my $first_file = 0;
+    my $to_pos     = undef;
     my $from_file  = $binlog_prefix . "." . sprintf( "%06d", ($i) );
     if ( $i == $start_num ) {
       $first_file = 1;
       $from_pos   = $start_pos;
+    }
+    if ( $i == $end_num && $end_pos) {
+      $to_pos = $end_pos;
     }
 
     # This should never happen
@@ -591,12 +613,12 @@ sub concat_all_binlogs_from($$$$) {
 
     if ($handle_raw_binlog) {
       $self->dump_binlog( $self->{dir}, $from_file, $from_pos, $outfile,
-        $first_file );
+        $first_file, $to_pos );
     }
     else {
       my $rc =
         $self->dump_mysqlbinlog( $self->{dir}, $from_file, $from_pos,
-        $outfile, $suppress_row_format );
+        $outfile, $suppress_row_format, $to_pos );
       if ($rc) {
         return $rc;
       }
