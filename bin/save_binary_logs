@@ -47,6 +47,8 @@ GetOptions(
     manager_version=s
     client_bindir=s
     client_libdir=s
+    end_file_num=i
+    end_pos=i
     debug
     /,
 ) or pod2usage(1);
@@ -170,12 +172,14 @@ sub generate_diff_binary_log() {
   my $start_binlog_file = $opt{start_file};
   my $start_binlog_pos  = $opt{start_pos};
   my $out_diff_file     = $opt{output_file};
-
+  my $end_binlog_num    = $opt{end_file_num};
+  my $end_binlog_pos    = $opt{end_pos};
   MHA::NodeUtil::drop_file_if($out_diff_file);
 
   if (
     $_binlog_manager->concat_all_binlogs_from(
-      $start_binlog_file, $start_binlog_pos, $out_diff_file
+      $start_binlog_file, $start_binlog_pos, $out_diff_file,
+        $end_binlog_num, $end_binlog_pos
     )
     )
   {
